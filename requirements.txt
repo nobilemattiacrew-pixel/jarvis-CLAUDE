@@ -1,0 +1,22 @@
+# Core dependencies for JARVIS AI Assistant
+
+# Desktop GUI framework (futuristic dark HUD interface)
+PyQt6>=6.7.0
+PyQt6-Qt6>=6.7.0
+
+# LLM API client (Anthropic Claude as default, OpenAI-compatible fallback)
+anthropic>=0.30.0
+openai>=1.40.0
+
+# Configuration management
+python-dotenv>=1.0.0
+
+# Speech: recognition (vocal commands) and synthesis (assistant voice)
+SpeechRecognition>=3.10.0
+pyttsx3>=2.90
+pyaudio>=0.2.11
+
+# Utility
+requests>=2.32.0
+# Optional: offline speech recognition (faster-whisper) - install only if needed
+# faster-whisper>=1.0.0
