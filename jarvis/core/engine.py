@@ -96,21 +96,42 @@ class Engine:
         """
         text_lower = user_text.lower().strip()
 
-        # Open authorized applications
-        for app_name, app_exe in Config.AUTHORIZED_APPS.items():
-            if f"apri {app_name}" in text_lower or f"lancia {app_name}" in text_lower:
-                self.logger.info(f"Opening authorized app: {app_name}")
+        # Open authorized applications (including Italian synonyms)
+        for app_key, app_exe in Config.AUTHORIZED_APPS.items():
+            # Direct match using the canonical key
+            if f"apri {app_key}" in text_lower or f"lancia {app_key}" in text_lower:
+                self.logger.info(f"Opening authorized app (direct key): {app_key}")
                 success = self.windows_tools.open_application(app_exe)
                 if success:
-                    return f"Sto aprendo {app_name}."
+                    return f"Sto aprendo {app_key}."
                 else:
-                    return f"Non riesco ad aprire {app_name}. Verifica che sia installato."
+                    return f"Non riesco ad aprire {app_key}. Verifica che sia installato."
+            # Check synonyms mapping if defined
+            if hasattr(Config, "APP_SYNONYMS"):
+                for synonym, canonical in Config.APP_SYNONYMS.items():
+                    if synonym in text_lower:
+                        # Use the canonical key to fetch the executable
+                        canonical_exe = Config.AUTHORIZED_APPS.get(canonical)
+                        if canonical_exe:
+                            self.logger.info(f"Opening authorized app via synonym '{synonym}' -> '{canonical}'")
+                            success = self.windows_tools.open_application(canonical_exe)
+                            if success:
+                                return f"Sto aprendo {canonical}."
+                            else:
+                                return f"Non riesco ad aprire {canonical}. Verifica che sia installato."
+                        # If synonym matched but no executable configured, skip (still safe)
 
         # Open authorized websites
         for site in Config.AUTHORIZED_URLS:
             # Simple check: if the site name (without protocol) is in the text
             site_name = site.replace("https://www.", "").replace("https://", "").rstrip("/")
-            if f"apri {site_name}" in text_lower or f"vai a {site_name}" in text_lower:
+            site_base = site_name.split(".")[0]
+            if (
+                f"apri {site_name}" in text_lower
+                or f"vai a {site_name}" in text_lower
+                or f"apri {site_base}" in text_lower
+                or f"vai a {site_base}" in text_lower
+            ):
                 self.logger.info(f"Opening authorized website: {site}")
                 success = self.windows_tools.open_website(site)
                 if success:

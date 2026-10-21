@@ -28,10 +28,20 @@ class SpeechManager:
         self.logger = logger
         self.recognizer = sr.Recognizer()
         self.tts_engine = pyttsx3.init()
+        # Ensure we use a voice that matches the configured language if possible
+        voices = self.tts_engine.getProperty("voices")
+        selected = False
+        for voice in voices:
+            if Config.LANGUAGE.lower() in voice.name.lower() or Config.LANGUAGE.lower() in voice.id.lower():
+                self.tts_engine.setProperty("voice", voice.id)
+                selected = True
+                self.logger.debug(f"Selected TTS voice '{voice.name}' for language {Config.LANGUAGE}")
+                break
+        if not selected:
+            self.logger.debug("No language‑specific TTS voice found; using default")
         self._is_listening = False
         self._listen_thread: Optional[threading.Thread] = None
         self._stop_listening = threading.Event()
-        self._microphone_available = False
 
         # Configure TTS engine from config
         self.tts_engine.setProperty("rate", Config.TTS_RATE)  # words per minute
@@ -43,11 +53,17 @@ class SpeechManager:
                 self.tts_engine.setProperty("voice", voice.id)
                 break
 
-        # Try to initialize microphone (may fail if PyAudio is not installed or no microphone available)
+        # Initialize microphone availability flag
+        self._microphone_available = False
         try:
-            self.microphone = sr.Microphone()
+            # Test if we can create a microphone instance using the optional index
+            if Config.MICROPHONE_INDEX is not None:
+                test_mic = sr.Microphone(device_index=Config.MICROPHONE_INDEX)
+            else:
+                test_mic = sr.Microphone()
+            del test_mic  # Clean up immediately
             self._microphone_available = True
-            self.logger.info("Microphone initialized successfully")
+            self.logger.info("Microphone detected and available")
         except Exception as e:
             self.logger.warning(
                 f"Microphone not available: {e}. Voice input disabled."
@@ -83,32 +99,43 @@ class SpeechManager:
             self.logger.warning("Microphone not available, cannot listen.")
             return None
 
-        with self.microphone as source:
-            self.logger.debug("Adjusting for ambient noise...")
-            self.recognizer.adjust_for_ambient_noise(source, duration=1)
-            self.logger.debug("Listening for speech...")
-            try:
+        # Use a fresh microphone instance for each listen operation
+        try:
+            with sr.Microphone() as source:
+                self.logger.debug("Adjusting for ambient noise...")
+                self.recognizer.adjust_for_ambient_noise(source, duration=1)
+                self.logger.debug("Listening for speech...")
                 audio = self.recognizer.listen(
                     source, timeout=timeout, phrase_time_limit=phrase_time_limit
                 )
                 self.logger.debug("Recognizing speech...")
-                text = self.recognizer.recognize_google(
-                    audio, language=Config.LANGUAGE
-                )
+                if Config.USE_GOOGLE_RECOGNITION:
+                    text = self.recognizer.recognize_google(
+                        audio, language=Config.LANGUAGE
+                    )
+                else:
+                    # Try offline recognition as fallback
+                    try:
+                        text = self.recognizer.recognize_sphinx(audio)
+                    except sr.RequestError:
+                        # Sphinx not available, try to use Google anyway as last resort
+                        text = self.recognizer.recognize_google(
+                            audio, language=Config.LANGUAGE
+                        )
                 self.logger.info(f"Recognized: {text}")
                 return text
-            except sr.WaitTimeoutError:
-                self.logger.debug("Listening timed out while waiting for phrase.")
-                return None
-            except sr.UnknownValueError:
-                self.logger.debug("Speech was unintelligible.")
-                return None
-            except sr.RequestError as e:
-                self.logger.error(f"Could not request results from speech service: {e}")
-                return None
-            except Exception as e:
-                self.logger.error(f"Unexpected error in speech recognition: {e}")
-                return None
+        except sr.WaitTimeoutError:
+            self.logger.debug("Listening timed out while waiting for phrase.")
+            return None
+        except sr.UnknownValueError:
+            self.logger.debug("Speech was unintelligible.")
+            return None
+        except sr.RequestError as e:
+            self.logger.error(f"Could not request results from speech service: {e}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Unexpected error in speech recognition: {e}")
+            return None
 
     def start_listening(self, callback) -> None:
         """Start background listening for commands.
@@ -148,27 +175,45 @@ class SpeechManager:
             self.logger.warning("Microphone not available, cannot start listening loop.")
             return
 
-        with self.microphone as source:
-            self.recognizer.adjust_for_ambient_noise(source, duration=1)
-            while not self._stop_listening.is_set():
-                try:
+        # Adjust for ambient noise once at the start
+        try:
+            with sr.Microphone() as source:
+                self.logger.debug("Adjusting for ambient noise in background loop...")
+                self.recognizer.adjust_for_ambient_noise(source, duration=1)
+        except Exception as e:
+            self.logger.error(f"Failed to adjust ambient noise: {e}")
+            return
+
+        while not self._stop_listening.is_set():
+            try:
+                with sr.Microphone() as source:
                     audio = self.recognizer.listen(
                         source, timeout=1.0, phrase_time_limit=5.0
                     )
-                    text = self.recognizer.recognize_google(
-                        audio, language=Config.LANGUAGE
-                    )
+                    if Config.USE_GOOGLE_RECOGNITION:
+                        text = self.recognizer.recognize_google(
+                            audio, language=Config.LANGUAGE
+                        )
+                    else:
+                        # Try offline recognition as fallback
+                        try:
+                            text = self.recognizer.recognize_sphinx(audio)
+                        except sr.RequestError:
+                            # Sphinx not available, try to use Google anyway as last resort
+                            text = self.recognizer.recognize_google(
+                                audio, language=Config.LANGUAGE
+                            )
                     self.logger.debug(f"Background recognized: {text}")
                     callback(text)
-                except sr.WaitTimeoutError:
-                    # Timeout is expected, just continue
-                    continue
-                except sr.UnknownValueError:
-                    # Speech was unintelligible, just continue
-                    continue
-                except sr.RequestError as e:
-                    self.logger.error(f"Speech service request error: {e}")
-                    time.sleep(1)  # Avoid tight loop on error
-                except Exception as e:
-                    self.logger.error(f"Unexpected error in background listening: {e}")
-                    time.sleep(1)
+            except sr.WaitTimeoutError:
+                # Timeout is expected, just continue
+                continue
+            except sr.UnknownValueError:
+                # Speech was unintelligible, just continue
+                continue
+            except sr.RequestError as e:
+                self.logger.error(f"Speech service request error: {e}")
+                time.sleep(1)  # Avoid tight loop on error
+            except Exception as e:
+                self.logger.error(f"Unexpected error in background listening: {e}")
+                time.sleep(1)

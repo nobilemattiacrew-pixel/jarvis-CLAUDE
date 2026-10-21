@@ -9,7 +9,8 @@ from __future__ import annotations
 import sys
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, pyqtSlot
+
 from PyQt6.QtGui import QFont, QTextCursor, QAction, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
@@ -58,6 +59,9 @@ class WorkerThread(QThread):
 class JarvisGUI(QMainWindow):
     """Main window for the JARVIS GUI."""
 
+    voice_recognized = pyqtSignal(str)
+    voice_error = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         self.logger = logger
@@ -72,6 +76,37 @@ class JarvisGUI(QMainWindow):
         self._show_welcome_message()
 
         self.logger.info("JARVIS GUI initialized")
+
+    def _connect_signals(self) -> None:
+        """Connect internal signals.
+
+        Connects voice_recognized and voice_error to their handlers.
+        """
+        self.voice_recognized.connect(self._handle_voice_result)
+        self.voice_error.connect(self._handle_voice_error)
+
+    @pyqtSlot(str)
+    def _handle_voice_result(self, text: str) -> None:
+        """Handle successful voice recognition.
+
+        Inserts the recognized text into the input field and triggers sending.
+        """
+        self.input_field.setText(text)
+        self._send_message()
+
+    @pyqtSlot(str)
+    def _handle_voice_error(self, error_msg: str) -> None:
+        """Handle voice recognition errors without crashing.
+
+        Logs the error and shows a status message.
+        """
+        logger.error(f"Voice thread error: {error_msg}")
+        self.status_label.setText("● Errore voce")
+        self.status_label.setStyleSheet("color: #ff4444;")
+        # Keep GUI alive – do not re‑raise.
+
+    # ---------------------------------------------------------------------
+    # Existing UI/setup methods (unchanged) follow unchanged up to the end of file.
 
     def _setup_ui(self) -> None:
         """Set up the user interface."""
@@ -167,8 +202,15 @@ class JarvisGUI(QMainWindow):
             self.activateWindow()
 
     def _connect_signals(self) -> None:
-        """Connect signals and slots."""
-        pass  # Signals connected in _setup_ui
+        """Connect signals and slots.
+
+        Connects voice recognition and error signals to their handlers.
+        """
+        # Worker thread signals are already connected in _send_message
+        # Connect voice signals
+        self.voice_recognized.connect(self._handle_voice_result)
+        self.voice_error.connect(self._handle_voice_error)
+
 
     def _apply_styles(self) -> None:
         """Apply the dark futuristic stylesheet."""
@@ -328,8 +370,9 @@ class JarvisGUI(QMainWindow):
         self.worker_thread.error_occurred.connect(self._on_error)
         self.worker_thread.start()
 
+    @pyqtSlot(str)
     def _on_response_ready(self, response: str) -> None:
-        """Handle response from the worker thread."""
+        """Handle response from the worker thread (runs in GUI thread)."""
         self._append_message(response, is_user=False)
         self._reset_input_state()
 
@@ -400,45 +443,21 @@ class JarvisGUI(QMainWindow):
         # Status will be updated by _process_voice_input
 
     def _process_voice_input(self) -> None:
-        """Process voice input in a background thread."""
+        """Process voice input in a background thread.
+
+        Emits ``voice_recognized`` with the recognized text or ``voice_error``
+        with an error message. This prevents uncaught exceptions from
+        terminating the GUI.
+        """
         try:
             text = self.speech.listen_once(timeout=3.0, phrase_time_limit=5.0)
             if text:
-                # Add to input field and send
-                self.input_field.setText(text)
-                self._send_message()
+                self.voice_recognized.emit(text)
             else:
-                # No speech detected
-                self.status_label.setText("● Pronto")
-                self.status_label.setStyleSheet("color: #00ff00;")
+                # No speech detected – emit a harmless error message
+                self.voice_error.emit("No speech detected")
         except Exception as e:
-            logger.error(f"Voice input error: {e}")
-            self.status_label.setText("● Errore voce")
-            self.status_label.setStyleSheet("color: #ff4444;")
-        finally:
-            # Reset button appearance
-            self.voice_button.setText("🎤")
-            self.voice_button.setStyleSheet("""
-                QPushButton#voiceButton {
-                    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                        stop:0 #003366, stop:1 #001f4d);
-                    border: 2px solid #00bfff;
-                    border-radius: 25px;
-                    color: #00bfff;
-                    font-weight: bold;
-                    font-size: 16px;
-                }
-                QPushButton#voiceButton:hover {
-                    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                        stop:0 #004080, stop:1 #002a66);
-                    border: 2px solid #00ffff;
-                }
-                QPushButton#voiceButton:pressed {
-                    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                        stop:0 #002653, stop:1 #001a33);
-                    border: 2px solid #0080ff;
-                }
-            """)
+            self.voice_error.emit(str(e))
 
     def closeEvent(self, event) -> None:
         """Handle window close event."""

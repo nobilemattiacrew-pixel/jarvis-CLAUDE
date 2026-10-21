@@ -20,21 +20,20 @@ class WindowsTools:
     """Provides safe interaction with Windows OS."""
 
     def open_application(self, app_exe: str) -> bool:
-        """Open an authorized application by its executable name.
+        """Open an authorized application by its *executable* name.
 
         Args:
-            app_exe: The executable name (e.g., "chrome.exe", "notepad.exe").
+            app_exe: The executable name (e.g., "calc.exe", "chrome.exe").
 
         Returns:
             True if the application was opened successfully, False otherwise.
         """
-        # Verify the app is in the authorized list (double-check)
+        # Verify the app executable is in the authorized list (double‑check)
         if app_exe not in Config.AUTHORIZED_APPS.values():
             logger.warning(f"Attempt to open unauthorized application: {app_exe}")
             return False
 
         try:
-            # Using subprocess.Popen to open the application
             subprocess.Popen(app_exe)
             logger.info(f"Opened application: {app_exe}")
             return True

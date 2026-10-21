@@ -28,6 +28,8 @@ class LLMClient:
             try:
                 import anthropic
 
+                if not Config.ANTHROPIC_API_KEY:
+                    raise ValueError("Anthropic API key not set in configuration")
                 self.client = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
                 self.logger.info(
                     f"Initialized Anthropic client with model: {self.model}"
@@ -35,6 +37,27 @@ class LLMClient:
             except ImportError:
                 self.logger.error(
                     "Anthropic package not installed. Install with: pip install anthropic"
+                )
+                raise
+        elif self.provider == "frellapi":
+            try:
+                import anthropic
+
+                # FreeLLMAPI uses the same Anthropic client but requires a custom base URL.
+                # API key may be optional; we still require a non‑empty value for consistency.
+                if not Config.FLLMAPI_API_KEY:
+                    raise ValueError("FreeLLMAPI API key not set in configuration")
+                # base_url overrides the default Anthropic endpoint.
+                self.client = anthropic.Anthropic(
+                    api_key=Config.FLLMAPI_API_KEY,
+                    base_url=Config.FLLMAPI_BASE_URL,
+                )
+                self.logger.info(
+                    f"Initialized FreeLLMAPI client (Anthropic compatible) with endpoint: {Config.FLLMAPI_BASE_URL}"
+                )
+            except ImportError:
+                self.logger.error(
+                    "Anthropic package not installed (required for FreeLLMAPI). Install with: pip install anthropic"
                 )
                 raise
         elif self.provider == "openai":
@@ -109,6 +132,27 @@ class LLMClient:
                     max_tokens=max_tokens,
                 )
                 return response.choices[0].message.content
+
+            elif self.provider == "frellapi":
+                # FreeLLMAPI exposes an Anthropic-compatible /v1/messages endpoint.
+                # We reuse the same Anthropic client initialized with the custom base_url.
+                anthropic_messages = []
+                system_msg = ""
+                for msg in messages:
+                    if msg["role"] == "system":
+                        system_msg = msg["content"]
+                    else:
+                        anthropic_messages.append(
+                            {"role": msg["role"], "content": msg["content"]}
+                        )
+
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=max_tokens or 1024,
+                    system=system_msg or None,
+                    messages=anthropic_messages,
+                )
+                return response.content[0].text
 
         except Exception as e:
             self.logger.error(f"LLM API call failed: {e}")
